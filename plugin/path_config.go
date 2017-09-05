@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/fatih/structs"
+	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
 )
@@ -27,6 +28,11 @@ to be precreated in the chef server.`,
 				Type: framework.TypeString,
 				Description: `PEM encoded client key to use for authenticating to chef
 server. This is generated when the client is created in the chef server`,
+			},
+			"default_policies": &framework.FieldSchema{
+				Type: framework.TypeString,
+				Description: `Comma seperated list of policies given to all tokens that
+successfully authenticate against this backend.`,
 			},
 		},
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -58,6 +64,7 @@ func (b *backend) pathConfigWrite(req *logical.Request, data *framework.FieldDat
 	baseURL := data.Get("base_url").(string)
 	clientName := data.Get("client_name").(string)
 	clientKey := data.Get("client_key").(string)
+	defaultPolicies := policyutil.ParsePolicies(data.Get("default_policies").(string))
 
 	_, err := parsePrivateKey(clientKey)
 	if err != nil {
@@ -70,9 +77,10 @@ func (b *backend) pathConfigWrite(req *logical.Request, data *framework.FieldDat
 	}
 
 	entry, err := logical.StorageEntryJSON("config", config{
-		BaseURL:    baseURL,
-		ClientName: clientName,
-		ClientKey:  clientKey,
+		BaseURL:         baseURL,
+		ClientName:      clientName,
+		ClientKey:       clientKey,
+		DefaultPolicies: defaultPolicies,
 	})
 
 	if err != nil {
@@ -103,9 +111,10 @@ func (b *backend) Config(s logical.Storage) (*config, error) {
 }
 
 type config struct {
-	BaseURL    string `json:"base_url" structs:"base_url"`
-	ClientKey  string `json:"client_key" structs:"client_key"`
-	ClientName string `json:"client_name" structs:"client_name"`
+	BaseURL         string   `json:"base_url" structs:"base_url"`
+	ClientKey       string   `json:"client_key" structs:"client_key"`
+	ClientName      string   `json:"client_name" structs:"client_name"`
+	DefaultPolicies []string `json:"default_policies" structs:"default_policies"`
 }
 
 const pathConfigHelpSyn = `
@@ -114,4 +123,6 @@ Configure Vault to connection to Chef server.
 const pathConfigHelpDesc = `
 Configure the URL of the chef server API endpoint and the client name and key used to
 make API requests to it.  The client must be already created in the chef server.
+Optionally add a default set of policies all clients authenticating against this endpoint
+will receive.
 `

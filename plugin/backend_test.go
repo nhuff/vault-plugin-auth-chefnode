@@ -298,9 +298,10 @@ func TestBackendAcc_Login(t *testing.T) {
 		t.Fatal(err)
 	}
 	vConfig := map[string]interface{}{
-		"client_name": clientName,
-		"client_key":  string(vaultKey),
-		"base_url":    chefURL,
+		"client_name":      clientName,
+		"client_key":       string(vaultKey),
+		"base_url":         chefURL,
+		"default_policies": "chef_default,mc",
 	}
 	_, err = b.HandleRequest(&logical.Request{
 		Operation: logical.UpdateOperation,
@@ -359,7 +360,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		t.Fatalf("login attempt failed")
 	}
 
-	exPols := []string{"default", "cp"}
+	exPols := []string{"default", "cp", "chef_default", "mc"}
 	if !policyutil.EquivalentPolicies(exPols, resp.Auth.Policies) {
 		t.Fatalf("policies didn't match:\nexpected: %#v\ngot: %#v\n", exPols, resp.Auth.Policies)
 	}

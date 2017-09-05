@@ -35,12 +35,13 @@ the read perimssions to any existing clients.
 * `client_name` (string,required) - Name of the client to connect as
 * `client_key` (string,required) - PEM encoded private key for the client
 * `base_url` (string,required) - URL of Chef API endpoint
+* `default_policies` (string, optional) - Comma seperated list of policies to apply to all clients authentiating to this endpoint
 
 #### Via the CLI
 
 ```
 $ vault write auth/chef-node/config client_name=vault client_key=@vault.pem \
-  base_url=https://manage.chef.io/organizations/vaulttest
+  base_url=https://manage.chef.io/organizations/vaulttest default_policies=foo,bar
 ```
 
 ## Authentication
@@ -142,6 +143,13 @@ $ vault write auth/chef-node/client/vault.example.com policies=cp
         <span class="param">client_key</span>
         <span class="param-flags">required</span>
         Private key of the Chef client vault should use to connect to the Chef server.
+      </li>
+    </ul>
+    <ul>
+      <li>
+        <span class="param">default_policies</span>
+        <span class="param-flags">optional</span>
+        Comma seperated list of policies to apply to all authenticated clients
       </li>
     </ul>
   </dd>

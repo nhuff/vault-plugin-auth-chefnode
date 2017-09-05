@@ -19,7 +19,7 @@ bin/vault-plugin-auth-chefnode: $(SRCS)
 	CGO_ENABLED=0 go build -o bin/vault-plugin-auth-chefnode main.go
 
 test:
-	go test github.com/nhuff/vault-plugin-auth-chefnode/plugin
+	go test -v github.com/nhuff/vault-plugin-auth-chefnode/plugin
 
 clean:
 	rm -rf bin

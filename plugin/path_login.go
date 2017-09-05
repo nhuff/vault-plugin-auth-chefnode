@@ -177,9 +177,14 @@ func (b *backend) getNodePolicies(req *logical.Request, node string) ([]string, 
 	if clientEntry != nil {
 		clientPols = clientEntry.Policies
 	}
-
+	config, err := b.Config(req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	defaultPols := config.DefaultPolicies
 	var allPol []string
 	allPol = append(allPol, clientPols...)
+	allPol = append(allPol, defaultPols...)
 	allPol = strutil.RemoveDuplicates(allPol, false)
 
 	return allPol, nil
