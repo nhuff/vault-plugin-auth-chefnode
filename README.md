@@ -9,7 +9,7 @@ The "chef-node" auth backend allows Nodes registered with a Chef server to
 $ vault write sys/plugins/catalog/chefnode-auth-plugin \
   sha_256=<expected SHA256 Hex value of the plugin binary> \
   command=vault-plugin-auth-chefnode
-$ vault auth-enable -path=chef-node -plugin=chefnode-auth-plugin plugin
+$ vault auth enable -path=chef-node -plugin-name=chefnode-auth-plugin plugin
 ```
 
 ## Configuration
