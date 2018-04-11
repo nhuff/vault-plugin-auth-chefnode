@@ -1,6 +1,7 @@
 package chefnode
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -10,9 +11,9 @@ import (
 	"github.com/hashicorp/vault/logical/framework"
 )
 
-func Factory(conf *logical.BackendConfig) (logical.Backend, error) {
+func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
 	b := Backend()
-	err := b.Setup(conf)
+	err := b.Setup(ctx, conf)
 	if err != nil {
 		return nil, err
 	}

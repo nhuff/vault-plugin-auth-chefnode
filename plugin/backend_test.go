@@ -1,6 +1,7 @@
 package chefnode
 
 import (
+	"context"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -24,9 +25,9 @@ func TestBackend_Config(t *testing.T) {
 	config := logical.TestBackendConfig()
 	storage := &logical.InmemStorage{}
 	config.StorageView = storage
-
+	ctx := context.Background()
 	b := Backend()
-	err := b.Setup(config)
+	err := b.Setup(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ AhXEa2Ie+mNe5fKzBIhREz9cQo6kF+3lYeL3XeKZiWMMgEsFlmFZ
 `,
 	}
 
-	_, err = b.HandleRequest(&logical.Request{
+	_, err = b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.UpdateOperation,
 		Path:      "config",
 		Data:      data,
@@ -75,7 +76,7 @@ AhXEa2Ie+mNe5fKzBIhREz9cQo6kF+3lYeL3XeKZiWMMgEsFlmFZ
 		t.Fatal(err)
 	}
 
-	resp, err := b.HandleRequest(&logical.Request{
+	resp, err := b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.ReadOperation,
 		Path:      "config",
 		Storage:   storage,
@@ -125,7 +126,7 @@ AhXEa2Ie+mNe5fKzBIhREz9cQo6kF+3lYeL3XeKZiWMMgEsFlmFZ
 `,
 	}
 
-	_, err = b.HandleRequest(&logical.Request{
+	_, err = b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.UpdateOperation,
 		Path:      "config",
 		Data:      data2,
@@ -169,7 +170,7 @@ AhXEa2Ie+mNe5fKzBIhREz9cQo6kF+3lYeL3XeKZiWMMgEsFlmFZ
 `,
 	}
 
-	_, err = b.HandleRequest(&logical.Request{
+	_, err = b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.UpdateOperation,
 		Path:      "config",
 		Data:      data3,
@@ -255,6 +256,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		return
 	}
 
+	ctx := context.Background()
 	clientName := os.Getenv("VAULT_CLIENT_NAME")
 	if clientName == "" {
 		t.Fatalf("env var VAULT_CLIENT_NAME not set")
@@ -289,7 +291,7 @@ func TestBackendAcc_Login(t *testing.T) {
 	bconfig := logical.TestBackendConfig()
 	bconfig.StorageView = storage
 	b := Backend()
-	err = b.Setup(bconfig)
+	err = b.Setup(ctx, bconfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +305,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		"base_url":         chefURL,
 		"default_policies": "chef_default,mc",
 	}
-	_, err = b.HandleRequest(&logical.Request{
+	_, err = b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.UpdateOperation,
 		Storage:   storage,
 		Path:      "config",
@@ -314,7 +316,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		"policies": "cp",
 	}
 
-	cpResp, err := b.HandleRequest(&logical.Request{
+	cpResp, err := b.HandleRequest(ctx, &logical.Request{
 		Operation: logical.UpdateOperation,
 		Path:      "client/" + nodeName,
 		Data:      cpData,
@@ -352,7 +354,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		Data:      loginInput,
 	}
 
-	resp, err := b.HandleRequest(loginRequest)
+	resp, err := b.HandleRequest(ctx, loginRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +388,7 @@ func TestBackendAcc_Login(t *testing.T) {
 		Data:      loginInput,
 	}
 
-	resp, err = b.HandleRequest(loginRequest)
+	resp, err = b.HandleRequest(ctx, loginRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

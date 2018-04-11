@@ -22,9 +22,14 @@
 
 
 [[constraint]]
-  name = "github.com/fatih/structs"
-  version = "1.0.0"
-
-[[constraint]]
   name = "github.com/hashicorp/vault"
-  version = "0.8.1"
+  version = "0.10.0"
+
+# version 0.11.0 had some issues that caused go test to fail for me
+[[override]]
+  name = "github.com/SAP/go-hdb"
+  version = "0.10.0"
+
+[prune]
+  go-tests = true
+  unused-packages = true

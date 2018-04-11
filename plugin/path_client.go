@@ -1,6 +1,7 @@
 package chefnode
 
 import (
+	"context"
 	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
@@ -38,16 +39,16 @@ func pathClients(b *backend) *framework.Path {
 	}
 }
 
-func (b *backend) pathClientList(req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	clients, err := req.Storage.List("client/")
+func (b *backend) pathClientList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	clients, err := req.Storage.List(ctx, "client/")
 	if err != nil {
 		return nil, err
 	}
 	return logical.ListResponse(clients), nil
 }
 
-func (b *backend) Client(s logical.Storage, n string) (*ClientEntry, error) {
-	entry, err := s.Get("client/" + n)
+func (b *backend) Client(ctx context.Context, s logical.Storage, n string) (*ClientEntry, error) {
+	entry, err := s.Get(ctx, "client/"+n)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +64,8 @@ func (b *backend) Client(s logical.Storage, n string) (*ClientEntry, error) {
 	return &result, nil
 }
 
-func (b *backend) pathClientDelete(req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	err := req.Storage.Delete("client/" + d.Get("name").(string))
+func (b *backend) pathClientDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	err := req.Storage.Delete(ctx, "client/"+d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +73,8 @@ func (b *backend) pathClientDelete(req *logical.Request, d *framework.FieldData)
 	return nil, nil
 }
 
-func (b *backend) pathClientRead(req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	client, err := b.Client(req.Storage, d.Get("name").(string))
+func (b *backend) pathClientRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	client, err := b.Client(ctx, req.Storage, d.Get("name").(string))
 	if err != nil {
 		return nil, err
 	}
@@ -88,14 +89,14 @@ func (b *backend) pathClientRead(req *logical.Request, d *framework.FieldData) (
 	}, nil
 }
 
-func (b *backend) pathClientWrite(req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathClientWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	entry, err := logical.StorageEntryJSON("client/"+d.Get("name").(string), &ClientEntry{
 		Policies: policyutil.ParsePolicies(d.Get("policies").(string)),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 

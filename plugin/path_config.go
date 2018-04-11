@@ -1,6 +1,7 @@
 package chefnode
 
 import (
+	"context"
 	"fmt"
 
 	"net/url"
@@ -44,8 +45,8 @@ successfully authenticate against this backend.`,
 	}
 }
 
-func (b *backend) pathConfigRead(req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	cfg, err := b.Config(req.Storage)
+func (b *backend) pathConfigRead(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+	cfg, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +61,7 @@ func (b *backend) pathConfigRead(req *logical.Request, data *framework.FieldData
 	return resp, nil
 }
 
-func (b *backend) pathConfigWrite(req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	baseURL := data.Get("base_url").(string)
 	clientName := data.Get("client_name").(string)
 	clientKey := data.Get("client_key").(string)
@@ -87,15 +88,15 @@ func (b *backend) pathConfigWrite(req *logical.Request, data *framework.FieldDat
 		return nil, err
 	}
 
-	if err := req.Storage.Put(entry); err != nil {
+	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
 }
 
-func (b *backend) Config(s logical.Storage) (*config, error) {
-	entry, err := s.Get("config")
+func (b *backend) Config(ctx context.Context, s logical.Storage) (*config, error) {
+	entry, err := s.Get(ctx, "config")
 	if err != nil {
 		return nil, err
 	}
