@@ -7,9 +7,11 @@ import (
 	"crypto/sha1"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/hashicorp/vault/helper/strutil"
 	"github.com/hashicorp/vault/logical"
 	"github.com/hashicorp/vault/logical/framework"
+	"github.com/tidwall/gjson"
 )
 
 func pathLogin(b *backend) *framework.Path {
@@ -91,6 +94,17 @@ func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *fra
 		return nil, err
 	}
 
+	metadata, err := b.getNodeMetadata(ctx, req, client)
+	if err != nil {
+		return nil, err
+	}
+	// pre-create the alias
+	alias := &logical.Alias{
+		Name:     client,
+		Metadata: metadata,
+	}
+
+	// get or create the entity
 	return &logical.Response{
 		Auth: &logical.Auth{
 			Policies:    policies,
@@ -105,6 +119,7 @@ func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *fra
 				"client_name":       data.Get("client_name"),
 				"timestamp":         data.Get("timestamp"),
 			},
+			Alias: alias,
 		},
 	}, nil
 }
@@ -137,6 +152,15 @@ func (b *backend) pathLoginRenew(ctx context.Context, req *logical.Request, d *f
 
 	if !policyutil.EquivalentPolicies(policies, req.Auth.Policies) {
 		return nil, fmt.Errorf("policies have changed, not renewing")
+	}
+
+	metadata, err := b.getNodeMetadata(ctx, req, client)
+	if err != nil {
+		return nil, err
+	}
+
+	if !reflect.DeepEqual(metadata, req.Auth.Metadata) {
+		return nil, fmt.Errorf("metadata have changed, not renewing")
 	}
 
 	return framework.LeaseExtend(0, 0, b.System())(ctx, req, d)
@@ -220,6 +244,68 @@ func (b *backend) getNodePolicies(ctx context.Context, req *logical.Request, nod
 	allPol = strutil.RemoveDuplicates(allPol, false)
 
 	return allPol, nil
+}
+
+func (b *backend) getNodeMetadata(ctx context.Context, req *logical.Request, node string) (map[string]string, error) {
+	// check if we have any metadata rules
+	metadataRules, err := req.Storage.List(ctx, "metadata/")
+	if err != nil {
+		return nil, err
+	}
+	if metadataRules == nil {
+		return nil, nil
+	}
+	if len(metadataRules) == 0 {
+		return nil, nil
+	}
+
+	// get our chefNode
+	chefclient, err := b.ChefClient(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	chefNode, err := chefclient.Nodes.Get(node)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := make(map[string]string)
+
+	jsonData, err := json.Marshal(chefNode.NormalAttributes)
+	if err != nil {
+		return nil, err
+	}
+
+	json := gjson.Parse(string(jsonData))
+	// we iterate over all rules and apply them if they match
+
+	for _, rulename := range metadataRules {
+		rule, err := b.Metadata(ctx, req.Storage, rulename)
+		if err != nil {
+			continue
+		}
+		result := json.Get(rule.Query)
+		if !result.Exists() {
+			continue
+		}
+		if result.IsObject() {
+			// if this is an object will fail if there is more then one child
+			obj := result.Map()
+			keys := reflect.ValueOf(obj).MapKeys()
+			if len(keys) != 1 {
+				continue
+			}
+			metadata[rule.Key] = keys[0].String()
+		} else if result.IsArray() {
+			// we don't support arrays right now
+			continue
+		} else {
+			metadata[rule.Key] = result.String()
+		}
+	}
+	// return the metadata
+	return metadata, nil
 }
 
 func (b *backend) retrievePubKey(ctx context.Context, req *logical.Request, targetName string) ([]*rsa.PublicKey, error) {

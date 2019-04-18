@@ -35,6 +35,9 @@ require (
 	github.com/prometheus/client_golang v0.9.2 // indirect
 	github.com/prometheus/common v0.3.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
+	github.com/tidwall/gjson v1.2.1
+	github.com/tidwall/match v1.0.1 // indirect
+	github.com/tidwall/pretty v0.0.0-20190325153808-1166b9ac2b65 // indirect
 	golang.org/x/crypto v0.0.0-20190417174047-f416ebab96af // indirect
 	golang.org/x/net v0.0.0-20190415214537-1da14a5a36f2 // indirect
 	golang.org/x/sys v0.0.0-20190416152802-12500544f89f // indirect
