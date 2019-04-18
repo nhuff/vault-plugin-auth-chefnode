@@ -8,6 +8,7 @@ require (
 	github.com/armon/go-radix v1.0.0 // indirect
 	github.com/elazarl/go-bindata-assetfs v1.0.0 // indirect
 	github.com/fatih/structs v1.1.0
+	github.com/go-chef/chef v0.0.0-20180320225528-cfd55cf96411
 	github.com/go-sql-driver/mysql v1.4.1 // indirect
 	github.com/golang/protobuf v1.3.1 // indirect
 	github.com/golang/snappy v0.0.1 // indirect

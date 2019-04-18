@@ -2,20 +2,25 @@ package chefnode
 
 import (
 	"context"
+	"crypto"
+	"encoding/base64"
+	"io"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"fmt"
 
-	"bytes"
-	"encoding/json"
-
 	"crypto/rsa"
+	"crypto/sha1"
 
+	chefapi "github.com/go-chef/chef"
 	"github.com/hashicorp/vault/helper/policyutil"
 	"github.com/hashicorp/vault/logical"
 	logicaltest "github.com/hashicorp/vault/logical/testing"
@@ -222,7 +227,6 @@ ywIDAQAB
 		ClientKey:  privKey,
 		ClientName: "test_client",
 	}
-
 	vaultURL, _ := url.Parse("http://localhost/v1/chef-node/login")
 	headers, _ := authHeaders(conf, vaultURL, "POST", nil, false)
 
@@ -278,14 +282,34 @@ func TestBackendAcc_Login(t *testing.T) {
 		t.Fatalf("env var VAULT_CHEF_URL not set")
 	}
 
+	skipSSLV, found := os.LookupEnv("VAULT_CHEF_SKIP_SSL")
+	var skipSSL bool
+	if found {
+		if skipSSLV == "0" {
+			skipSSL = false
+		} else {
+			skipSSL = true
+		}
+	} else {
+		skipSSL = false
+	}
+	key, _ := ioutil.ReadFile(adminKeyFile)
+
+	chefclient, err := chefapi.NewClient(&chefapi.Config{
+		Name:    adminName,
+		Key:     string(key),
+		BaseURL: chefURL,
+		SkipSSL: skipSSL,
+	})
+
 	nodeName := randString()
-	nodeKey, err := setupTestNode(nodeName)
-	secondaryKey, err := addClientKey(nodeName)
+	nodeKey, err := setupTestNode(chefclient, nodeName)
+	secondaryKey, err := addClientKey(chefclient, nodeName)
 
 	if err != nil {
 		t.Fatalf("Couldn't setup test node %s", nodeName)
 	}
-	defer teardownTestNode(nodeName)
+	defer teardownTestNode(chefclient, nodeName)
 
 	storage := &logical.InmemStorage{}
 	bconfig := logical.TestBackendConfig()
@@ -410,82 +434,24 @@ func randString() string {
 	return string(b)
 }
 
-func chefRequest(object string, method string, body []byte) (*http.Response, error) {
-	adminName := os.Getenv("VAULT_ADMIN_NAME")
-	adminKeyFile := os.Getenv("VAULT_ADMIN_KEYFILE")
-	chefURL := os.Getenv("VAULT_CHEF_URL")
-	key, _ := ioutil.ReadFile(adminKeyFile)
-	conf := &config{
-		ClientName: adminName,
-		ClientKey:  string(key),
+func setupTestNode(chefclient *chefapi.Client, name string) (string, error) {
+	client, err := chefclient.Clients.Create(name, false)
+	if err != nil {
+		return "", err
 	}
-	url, _ := url.Parse(chefURL + "/" + object)
-	bodyBuf := bytes.NewBuffer(body)
-	headerBuf := bytes.NewBuffer(body)
 
-	headers, err := authHeaders(conf, url, method, headerBuf, true)
-	if err != nil {
-		return nil, err
+	nodeData := &chefapi.Node{
+		Name: name,
 	}
-	headers.Add("Content-Type", "application/json")
-	req, err := http.NewRequest(method, url.String(), bodyBuf)
-	req.Header = headers
-	client := &http.Client{}
-	resp, err := client.Do(req)
+
+	_, err = chefclient.Nodes.Post(*nodeData)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return resp, nil
+	return client.PrivateKey, nil
 }
 
-func setupTestNode(name string) (string, error) {
-	clientData := struct {
-		Name        string `json:"name"`
-		GenerateKey bool   `json:"create_key"`
-	}{
-		name,
-		true,
-	}
-	clientJSON, err := json.Marshal(clientData)
-	if err != nil {
-		return "", err
-	}
-
-	clientResp, err := chefRequest("clients", "POST", clientJSON)
-	if err != nil {
-		return "", err
-	}
-	defer clientResp.Body.Close()
-	cBody, err := ioutil.ReadAll(clientResp.Body)
-	if err != nil {
-		return "", err
-	}
-	var clientRespStruct struct {
-		PrivateKey string `json:"private_key"`
-	}
-	err = json.Unmarshal(cBody, &clientRespStruct)
-	if err != nil {
-		return "", err
-	}
-
-	nodeData := struct {
-		Name string `json:"name"`
-	}{
-		name,
-	}
-	nodeJSON, err := json.Marshal(nodeData)
-	if err != nil {
-		return "", err
-	}
-	_, err = chefRequest("nodes", "POST", nodeJSON)
-	if err != nil {
-		return "", err
-	}
-
-	return clientRespStruct.PrivateKey, nil
-}
-
-func addClientKey(name string) (string, error) {
+func addClientKey(chefclient *chefapi.Client, name string) (string, error) {
 	keyReq := struct {
 		Name   string `json:"name"`
 		Exp    string `json:"expiration_date"`
@@ -495,25 +461,17 @@ func addClientKey(name string) (string, error) {
 		"infinity",
 		true,
 	}
-	keyJSON, err := json.Marshal(keyReq)
+
+	keyJSON, err := chefapi.JSONReader(keyReq)
 	if err != nil {
 		return "", err
 	}
 
-	keyResp, err := chefRequest("clients/"+name+"/keys", "POST", keyJSON)
-	if err != nil {
-		return "", err
-	}
-	defer keyResp.Body.Close()
-	kBody, err := ioutil.ReadAll(keyResp.Body)
-	if err != nil {
-		return "", err
-	}
-
+	req, err := chefclient.NewRequest("POST", "clients/"+name+"/keys", keyJSON)
 	var KeyRespStruct struct {
 		PrivateKey string `json:"private_key"`
 	}
-	err = json.Unmarshal(kBody, &KeyRespStruct)
+	_, err = chefclient.Do(req, KeyRespStruct)
 	if err != nil {
 		return "", err
 	}
@@ -521,11 +479,76 @@ func addClientKey(name string) (string, error) {
 	return KeyRespStruct.PrivateKey, nil
 }
 
-func teardownTestNode(name string) error {
-	_, err := chefRequest("nodes/"+name, "DELETE", []byte(""))
+func teardownTestNode(chefclient *chefapi.Client, name string) error {
+	err := chefclient.Nodes.Delete(name)
 	if err != nil {
 		return err
 	}
-	_, err = chefRequest("clients/"+name, "DELETE", []byte(""))
+
+	err = chefclient.Clients.Delete(name)
 	return err
+}
+
+func authHeaders(conf *config, url *url.URL, method string, body io.Reader, split bool) (http.Header, error) {
+	hashedPath := sha1.Sum([]byte(url.EscapedPath()))
+	var bodyHash [20]byte
+
+	if body != nil {
+		bodyData, err := ioutil.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
+		bodyHash = sha1.Sum(bodyData)
+	} else {
+		bodyHash = sha1.Sum([]byte(""))
+	}
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	headers := []string{
+		"Method:" + method,
+		"Hashed Path:" + base64.StdEncoding.EncodeToString(hashedPath[:]),
+		"X-Ops-Content-Hash:" + base64.StdEncoding.EncodeToString(bodyHash[:]),
+		"X-Ops-Timestamp:" + ts,
+		"X-Ops-UserId:" + conf.ClientName,
+	}
+
+	headerString := strings.Join(headers, "\n")
+	key, err := parsePrivateKey(conf.ClientKey)
+	if err != nil {
+		return nil, err
+	}
+
+	sig, err := rsa.SignPKCS1v15(nil, key, crypto.Hash(0), []byte(headerString))
+	if err != nil {
+		return nil, err
+	}
+	ret := make(http.Header)
+	if split {
+		splitSig := splitOn60(base64.StdEncoding.EncodeToString(sig))
+		for i := range splitSig {
+			ret.Set(fmt.Sprintf("X-Ops-Authorization-%d", i+1), splitSig[i])
+		}
+	} else {
+		ret.Set("X-Ops-Authorization", base64.StdEncoding.EncodeToString(sig))
+	}
+	ret.Set("X-Ops-Sign", "algorithm=sha1;version=1.0;")
+	ret.Set("Method", method)
+	ret.Set("X-Ops-Timestamp", ts)
+	ret.Set("X-Ops-Content-Hash", base64.StdEncoding.EncodeToString(bodyHash[:]))
+	ret.Set("X-Ops-Userid", conf.ClientName)
+	ret.Set("Accept", "application/json")
+	ret.Set("X-Chef-Version", "12.0.0")
+	ret.Set("host", url.Host)
+
+	return ret, nil
+}
+
+func splitOn60(toSplit string) []string {
+	size := int(math.Ceil(float64(len(toSplit)) / 60.0))
+	sl := make([]string, size)
+	for i := 0; i < size-1; i++ {
+		sl[i] = toSplit[(i * 60) : (i*60)+60]
+	}
+	sl[size-1] = toSplit[(size-1)*60:]
+	return sl
 }
