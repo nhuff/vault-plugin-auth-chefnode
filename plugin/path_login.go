@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 
 	"time"
@@ -155,8 +156,66 @@ func (b *backend) getNodePolicies(ctx context.Context, req *logical.Request, nod
 		return nil, err
 	}
 	defaultPols := config.DefaultPolicies
+
+	chefclient, err := b.ChefClient(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// get the node information from chef
+	chefNode, err := chefclient.Nodes.Get(node)
+	if err != nil {
+		return nil, err
+	}
+
+	// environment policies
+	var envPols []string
+	envEntry, err := b.Environment(ctx, req.Storage, chefNode.Environment)
+	if err != nil {
+		return nil, err
+	}
+	if envEntry != nil {
+		envPols = envEntry.Policies
+	}
+
+	// role policies
+	var rolePols []string
+	// iterate over the run list to find all roles
+	roleRe := regexp.MustCompile(`role\[(.+?)\]`)
+	for i := range chefNode.RunList {
+		reRes := roleRe.FindStringSubmatch(chefNode.RunList[i])
+		if len(reRes) >= 2 {
+			// we found a role, check for any policies
+			roleEntry, err := b.Role(ctx, req.Storage, reRes[1])
+			if err != nil {
+				continue
+			}
+			if roleEntry != nil {
+				rolePols = append(rolePols, roleEntry.Policies...)
+			}
+		}
+	}
+
+	// tags
+	var tagPols []string
+	// this will fail if someone fucks up the chef attributes
+	// maybe we should check before we use range on it
+	nodeTags := chefNode.NormalAttributes["tags"].([]interface{})
+	for i := range nodeTags {
+		tagEntry, err := b.Tag(ctx, req.Storage, nodeTags[i].(string))
+		if err != nil {
+			continue
+		}
+		if tagEntry != nil {
+			tagPols = append(tagPols, tagEntry.Policies...)
+		}
+	}
+
 	var allPol []string
 	allPol = append(allPol, clientPols...)
+	allPol = append(allPol, envPols...)
+	allPol = append(allPol, rolePols...)
+	allPol = append(allPol, tagPols...)
 	allPol = append(allPol, defaultPols...)
 	allPol = strutil.RemoveDuplicates(allPol, false)
 
