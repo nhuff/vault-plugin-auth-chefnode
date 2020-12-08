@@ -3,7 +3,10 @@ package chefnode
 import (
 	"context"
 	"crypto"
+	"crypto/rsa"
+	"crypto/sha1"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math"
@@ -15,15 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"fmt"
-
-	"crypto/rsa"
-	"crypto/sha1"
-
 	chefapi "github.com/go-chef/chef"
-	"github.com/hashicorp/vault/helper/policyutil"
-	"github.com/hashicorp/vault/logical"
-	logicaltest "github.com/hashicorp/vault/logical/testing"
+	logicaltest "github.com/hashicorp/vault/helper/testhelpers/logical"
+	"github.com/hashicorp/vault/sdk/helper/policyutil"
+	"github.com/hashicorp/vault/sdk/logical"
 )
 
 func TestBackend_Config(t *testing.T) {
@@ -435,7 +433,10 @@ func randString() string {
 }
 
 func setupTestNode(chefclient *chefapi.Client, name string) (string, error) {
-	client, err := chefclient.Clients.Create(name, false)
+	apiClnt := chefapi.ApiNewClient{
+		Name: name,
+	}
+	client, err := chefclient.Clients.Create(apiClnt)
 	if err != nil {
 		return "", err
 	}
@@ -448,7 +449,7 @@ func setupTestNode(chefclient *chefapi.Client, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return client.PrivateKey, nil
+	return client.ChefKey.PrivateKey, nil
 }
 
 func addClientKey(chefclient *chefapi.Client, name string) (string, error) {
