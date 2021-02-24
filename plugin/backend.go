@@ -7,8 +7,8 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	"github.com/hashicorp/vault/logical"
-	"github.com/hashicorp/vault/logical/framework"
+	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/logical"
 )
 
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
@@ -36,10 +36,19 @@ func Backend() *backend {
 			pathConfig(&b),
 			pathClients(&b),
 			pathClientsList(&b),
+			pathEnvironments(&b),
+			pathEnvironmentsList(&b),
+			pathRoles(&b),
+			pathRolesList(&b),
+			pathTags(&b),
+			pathTagsList(&b),
+			pathMetadata(&b),
+			pathMetadataList(&b),
 		}),
 
 		AuthRenew: b.pathLoginRenew,
 	}
+
 	return &b
 }
 

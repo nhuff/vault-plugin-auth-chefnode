@@ -1,34 +1,29 @@
 package chefnode
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math"
-	"net/http"
-	"sort"
+	"reflect"
+	"regexp"
 	"strings"
-
-	"net/url"
 
 	"time"
 
-	"io/ioutil"
+	chefapi "github.com/chef/go-chef"
 
-	"encoding/json"
-
-	"io"
-
-	"github.com/hashicorp/vault/helper/policyutil"
-	"github.com/hashicorp/vault/helper/strutil"
-	"github.com/hashicorp/vault/logical"
-	"github.com/hashicorp/vault/logical/framework"
+	"github.com/hashicorp/vault/sdk/helper/strutil"
+	"github.com/hashicorp/vault/sdk/helper/policyutil"
+	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/logical"
+	"github.com/tidwall/gjson"
 )
 
 func pathLogin(b *backend) *framework.Path {
@@ -100,6 +95,17 @@ func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *fra
 		return nil, err
 	}
 
+	metadata, err := b.getNodeMetadata(ctx, req, client)
+	if err != nil {
+		return nil, err
+	}
+	// pre-create the alias
+	alias := &logical.Alias{
+		Name:     client,
+		Metadata: metadata,
+	}
+
+	// get or create the entity
 	return &logical.Response{
 		Auth: &logical.Auth{
 			Policies:    policies,
@@ -114,6 +120,7 @@ func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *fra
 				"client_name":       data.Get("client_name"),
 				"timestamp":         data.Get("timestamp"),
 			},
+			Alias: alias,
 		},
 	}, nil
 }
@@ -148,25 +155,16 @@ func (b *backend) pathLoginRenew(ctx context.Context, req *logical.Request, d *f
 		return nil, fmt.Errorf("policies have changed, not renewing")
 	}
 
+	metadata, err := b.getNodeMetadata(ctx, req, client)
+	if err != nil {
+		return nil, err
+	}
+
+	if !reflect.DeepEqual(metadata, req.Auth.Metadata) {
+		return nil, fmt.Errorf("metadata have changed, not renewing")
+	}
+
 	return framework.LeaseExtend(0, 0, b.System())(ctx, req, d)
-}
-
-func constructAuthorization(h http.Header) string {
-	authHeaders := make(map[string]string)
-	var keys []string
-	var ret bytes.Buffer
-
-	for k, v := range h {
-		if strings.HasPrefix(k, "X-Ops-Authorization-") {
-			authHeaders[k] = v[0]
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	for _, v := range keys {
-		ret.WriteString(authHeaders[v])
-	}
-	return ret.String()
 }
 
 func (b *backend) getNodePolicies(ctx context.Context, req *logical.Request, node string) ([]string, error) {
@@ -183,95 +181,179 @@ func (b *backend) getNodePolicies(ctx context.Context, req *logical.Request, nod
 		return nil, err
 	}
 	defaultPols := config.DefaultPolicies
+
+	chefclient, err := b.ChefClient(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// get the node information from chef
+	chefNode, err := chefclient.Nodes.Get(node)
+	if err != nil {
+		return nil, err
+	}
+
+	// environment policies
+	var envPols []string
+	envEntry, err := b.Environment(ctx, req.Storage, chefNode.Environment)
+	if err != nil {
+		return nil, err
+	}
+	if envEntry != nil {
+		envPols = envEntry.Policies
+	}
+
+	// role policies
+	var rolePols []string
+	// iterate over the run list to find all roles
+	roleRe := regexp.MustCompile(`role\[(.+?)\]`)
+	for i := range chefNode.RunList {
+		reRes := roleRe.FindStringSubmatch(chefNode.RunList[i])
+		if len(reRes) >= 2 {
+			// we found a role, check for any policies
+			roleEntry, err := b.Role(ctx, req.Storage, reRes[1])
+			if err != nil {
+				continue
+			}
+			if roleEntry != nil {
+				rolePols = append(rolePols, roleEntry.Policies...)
+			}
+		}
+	}
+
+	// tags
+	var tagPols []string
+	// this will fail if someone fucks up the chef attributes
+	// maybe we should check before we use range on it
+	nodeTags := chefNode.NormalAttributes["tags"].([]interface{})
+	for i := range nodeTags {
+		tagEntry, err := b.Tag(ctx, req.Storage, nodeTags[i].(string))
+		if err != nil {
+			continue
+		}
+		if tagEntry != nil {
+			tagPols = append(tagPols, tagEntry.Policies...)
+		}
+	}
+
 	var allPol []string
 	allPol = append(allPol, clientPols...)
+	allPol = append(allPol, envPols...)
+	allPol = append(allPol, rolePols...)
+	allPol = append(allPol, tagPols...)
 	allPol = append(allPol, defaultPols...)
 	allPol = strutil.RemoveDuplicates(allPol, false)
 
 	return allPol, nil
 }
 
+func (b *backend) getNodeMetadata(ctx context.Context, req *logical.Request, node string) (map[string]string, error) {
+	// check if we have any metadata rules
+	metadataRules, err := req.Storage.List(ctx, "metadata/")
+	if err != nil {
+		return nil, err
+	}
+	if metadataRules == nil {
+		return nil, nil
+	}
+	if len(metadataRules) == 0 {
+		return nil, nil
+	}
+
+	// get our chefNode
+	chefclient, err := b.ChefClient(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	chefNode, err := chefclient.Nodes.Get(node)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := make(map[string]string)
+
+	jsonData, err := json.Marshal(chefNode.NormalAttributes)
+	if err != nil {
+		return nil, err
+	}
+
+	json := gjson.Parse(string(jsonData))
+	// we iterate over all rules and apply them if they match
+
+	for _, rulename := range metadataRules {
+		rule, err := b.Metadata(ctx, req.Storage, rulename)
+		if err != nil {
+			continue
+		}
+		result := json.Get(rule.Query)
+		if !result.Exists() {
+			continue
+		}
+		if result.IsObject() {
+			// if this is an object will fail if there is more then one child
+			obj := result.Map()
+			keys := reflect.ValueOf(obj).MapKeys()
+			if len(keys) != 1 {
+				continue
+			}
+			metadata[rule.Key] = keys[0].String()
+		} else if result.IsArray() {
+			// we don't support arrays right now
+			continue
+		} else {
+			metadata[rule.Key] = result.String()
+		}
+	}
+	// return the metadata
+	return metadata, nil
+}
+
 func (b *backend) retrievePubKey(ctx context.Context, req *logical.Request, targetName string) ([]*rsa.PublicKey, error) {
+	chefclient, err := b.ChefClient(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// get the keylist from the client
+	clientKeylist, err := chefclient.Clients.ListKeys(targetName)
+	if err != nil {
+		return nil, err
+	}
+
+	// get all keys
 	var keys []*rsa.PublicKey
+	for i := range *clientKeylist {
+		if (*clientKeylist)[i].Expired == false {
+			// get the key from the server
+			key, err := chefclient.Clients.GetKey(targetName, (*clientKeylist)[i].Name)
+			if err != nil {
+				continue
+			}
+			rsaKey, err := parsePublicKey(key.PublicKey)
+			if err != nil {
+				continue
+			}
+			keys = append(keys, rsaKey)
+		}
+	}
+	return keys, nil
+}
+
+func (b *backend) ChefClient(ctx context.Context, req *logical.Request) (*chefapi.Client, error) {
+	// get the config from the backend
 	config, err := b.Config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
 
-	keysURL, err := url.Parse(config.BaseURL + "/clients/" + targetName + "/keys")
-	if err != nil {
-		return nil, err
-	}
-
-	headers, err := authHeaders(config, keysURL, "GET", nil, true)
-	if err != nil {
-		return nil, err
-	}
-
-	clientReq, err := http.NewRequest("GET", keysURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	clientReq.Header = headers
-	client := &http.Client{}
-	resp, err := client.Do(clientReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	var kr []keyInfo
-	if err := json.Unmarshal(body, &kr); err != nil {
-		return nil, fmt.Errorf("Couldn't unmarshal '%s' into keyInfo", body)
-	}
-	for i := range kr {
-		if kr[i].Expired {
-			continue
-		}
-		keyURL, err := url.Parse(kr[i].URI)
-		if err != nil {
-			return nil, err
-		}
-
-		keyHeaders, err := authHeaders(config, keyURL, "GET", nil, true)
-		if err != nil {
-			return nil, err
-		}
-
-		keyReq, err := http.NewRequest("GET", keyURL.String(), nil)
-		if err != nil {
-			return nil, err
-		}
-
-		keyReq.Header = keyHeaders
-		keyClient := &http.Client{}
-		keyResp, err := keyClient.Do(keyReq)
-		if err != nil {
-			return nil, err
-		}
-		defer keyResp.Body.Close()
-		keyBody, err := ioutil.ReadAll(keyResp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		var ck struct {
-			ClientKey string `json:"public_key"`
-		}
-		err = json.Unmarshal(keyBody, &ck)
-		if err != nil {
-			return nil, err
-		}
-
-		cKey, err := parsePublicKey(ck.ClientKey)
-		keys = append(keys, cKey)
-	}
-
-	return keys, nil
+	// create a new chef api client
+	return chefapi.NewClient(&chefapi.Config{
+		Name:    config.ClientName,
+		Key:     config.ClientKey,
+		BaseURL: config.BaseURL,
+		SkipSSL: config.SkipSSL,
+	})
 }
 
 func authenticate(client string, ts string, sig string, sigVer string, keys []*rsa.PublicKey, path string) bool {
@@ -296,70 +378,6 @@ func authenticate(client string, ts string, sig string, sigVer string, keys []*r
 		}
 	}
 	return false
-}
-
-func authHeaders(conf *config, url *url.URL, method string, body io.Reader, split bool) (http.Header, error) {
-	hashedPath := sha1.Sum([]byte(url.EscapedPath()))
-	var bodyHash [20]byte
-
-	if body != nil {
-		bodyData, err := ioutil.ReadAll(body)
-		if err != nil {
-			return nil, err
-		}
-		bodyHash = sha1.Sum(bodyData)
-	} else {
-		bodyHash = sha1.Sum([]byte(""))
-	}
-
-	ts := time.Now().UTC().Format(time.RFC3339)
-	headers := []string{
-		"Method:" + method,
-		"Hashed Path:" + base64.StdEncoding.EncodeToString(hashedPath[:]),
-		"X-Ops-Content-Hash:" + base64.StdEncoding.EncodeToString(bodyHash[:]),
-		"X-Ops-Timestamp:" + ts,
-		"X-Ops-UserId:" + conf.ClientName,
-	}
-
-	headerString := strings.Join(headers, "\n")
-	key, err := parsePrivateKey(conf.ClientKey)
-	if err != nil {
-		return nil, err
-	}
-
-	sig, err := rsa.SignPKCS1v15(nil, key, crypto.Hash(0), []byte(headerString))
-	if err != nil {
-		return nil, err
-	}
-	ret := make(http.Header)
-	if split {
-		splitSig := splitOn60(base64.StdEncoding.EncodeToString(sig))
-		for i := range splitSig {
-			ret.Set(fmt.Sprintf("X-Ops-Authorization-%d", i+1), splitSig[i])
-		}
-	} else {
-		ret.Set("X-Ops-Authorization", base64.StdEncoding.EncodeToString(sig))
-	}
-	ret.Set("X-Ops-Sign", "algorithm=sha1;version=1.0;")
-	ret.Set("Method", method)
-	ret.Set("X-Ops-Timestamp", ts)
-	ret.Set("X-Ops-Content-Hash", base64.StdEncoding.EncodeToString(bodyHash[:]))
-	ret.Set("X-Ops-Userid", conf.ClientName)
-	ret.Set("Accept", "application/json")
-	ret.Set("X-Chef-Version", "12.0.0")
-	ret.Set("host", url.Host)
-
-	return ret, nil
-}
-
-func splitOn60(toSplit string) []string {
-	size := int(math.Ceil(float64(len(toSplit)) / 60.0))
-	sl := make([]string, size)
-	for i := 0; i < size-1; i++ {
-		sl[i] = toSplit[(i * 60) : (i*60)+60]
-	}
-	sl[size-1] = toSplit[(size-1)*60:]
-	return sl
 }
 
 func parsePublicKey(key string) (*rsa.PublicKey, error) {

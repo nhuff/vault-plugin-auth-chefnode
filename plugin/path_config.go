@@ -7,9 +7,9 @@ import (
 	"net/url"
 
 	"github.com/fatih/structs"
-	"github.com/hashicorp/vault/helper/policyutil"
-	"github.com/hashicorp/vault/logical"
-	"github.com/hashicorp/vault/logical/framework"
+	"github.com/hashicorp/vault/sdk/helper/policyutil"
+	"github.com/hashicorp/vault/sdk/framework"
+	"github.com/hashicorp/vault/sdk/logical"
 )
 
 func pathConfig(b *backend) *framework.Path {
@@ -34,6 +34,11 @@ server. This is generated when the client is created in the chef server`,
 				Type: framework.TypeString,
 				Description: `Comma seperated list of policies given to all tokens that
 successfully authenticate against this backend.`,
+			},
+			"skip_ssl_verify": &framework.FieldSchema{
+				Type:        framework.TypeBool,
+				Description: `Skip verification of the Chef server SSL certificate.`,
+				Default:     false,
 			},
 		},
 		Callbacks: map[logical.Operation]framework.OperationFunc{
@@ -66,6 +71,7 @@ func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, dat
 	clientName := data.Get("client_name").(string)
 	clientKey := data.Get("client_key").(string)
 	defaultPolicies := policyutil.ParsePolicies(data.Get("default_policies").(string))
+	skipSSL := data.Get("skip_ssl_verify").(bool)
 
 	_, err := parsePrivateKey(clientKey)
 	if err != nil {
@@ -82,6 +88,7 @@ func (b *backend) pathConfigWrite(ctx context.Context, req *logical.Request, dat
 		ClientName:      clientName,
 		ClientKey:       clientKey,
 		DefaultPolicies: defaultPolicies,
+		SkipSSL:         skipSSL,
 	})
 
 	if err != nil {
@@ -116,6 +123,7 @@ type config struct {
 	ClientKey       string   `json:"client_key" structs:"client_key"`
 	ClientName      string   `json:"client_name" structs:"client_name"`
 	DefaultPolicies []string `json:"default_policies" structs:"default_policies"`
+	SkipSSL         bool     `json:"skip_ssl_verify" structs:"skip_ssl_verify"`
 }
 
 const pathConfigHelpSyn = `
